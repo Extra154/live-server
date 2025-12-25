@@ -1,0 +1,59 @@
+const sqlite3 = require("sqlite3").verbose();
+
+// Create / open database
+const db = new sqlite3.Database("./live.db", (err) => {
+    if (err) {
+        console.error("❌ Failed to open DB:", err.message);
+    } else {
+        console.log("✅ Connected to live.db");
+    }
+});
+
+db.serialize(() => {
+
+    // LIVE STREAMS TABLE
+    db.run(`
+        CREATE TABLE IF NOT EXISTS live_streams (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            stream_id TEXT UNIQUE NOT NULL,
+            host_username TEXT,
+            views INTEGER DEFAULT 0,
+            likes INTEGER DEFAULT 0,
+            comment_count INTEGER DEFAULT 0,
+            is_live INTEGER DEFAULT 1,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+
+    // COMMENTS TABLE
+    db.run(`
+        CREATE TABLE IF NOT EXISTS live_comments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            stream_id TEXT NOT NULL,
+            username TEXT NOT NULL,
+            comment TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+
+    // VIEWERS TABLE
+    db.run(`
+        CREATE TABLE IF NOT EXISTS live_viewers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            stream_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(stream_id, user_id)
+        )
+    `);
+
+    console.log("✅ Tables ensured");
+});
+
+// Optional: close DB on exit
+process.on("SIGINT", () => {
+    db.close(() => {
+        console.log("🛑 Database closed");
+        process.exit(0);
+    });
+});
