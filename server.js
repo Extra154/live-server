@@ -105,15 +105,17 @@ db.run(
 app.post("/live/end", (req, res) => {
   const { stream_id } = req.body;
 
-  db.run(
-    UPDATE live_streams SET is_live = 0 WHERE stream_id = ?,
-    [stream_id],
-    () => {
-      io.to(stream_id).emit("liveEnded");
-      res.json({ success: true });
+db.run(
+  `UPDATE live_streams SET is_live = 0 WHERE stream_id = ?`,
+  [streamId],
+  function (err) {
+    if (err) {
+      console.error("Error stopping live stream:", err.message);
+      return res.status(500).json({ error: "Failed to stop live stream" });
     }
-  );
-});
+    res.json({ message: "Live stream stopped" });
+  }
+);
 
 // ================= GET LIVE STREAMS =================
 app.get("/live/list", (req, res) => {
@@ -204,3 +206,4 @@ server.listen(PORT, () => {
   console.log(Live server running on port ${PORT});
 
 });
+
