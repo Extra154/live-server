@@ -89,17 +89,17 @@ app.post("/live/start", (req, res) => {
   const { host_username } = req.body;
   const stream_id = uuidv4();
 
-  db.run(
-    INSERT INTO live_streams (stream_id, host_username) VALUES (?, ?),
-    [stream_id, host_username],
-    err => {
-      if (err) {
-        return res.status(500).json({ error: err.message });
-      }
-      res.json({ stream_id });
+db.run(
+  `INSERT INTO live_streams (stream_id, host_username) VALUES (?, ?)`,
+  [streamId, hostUsername],
+  function (err) {
+    if (err) {
+      console.error("Error inserting live stream:", err.message);
+      return res.status(500).json({ error: "Failed to start live stream" });
     }
-  );
-});
+    res.json({ message: "Live stream started", id: this.lastID });
+  }
+);
 
 // ================= END LIVE =================
 app.post("/live/end", (req, res) => {
@@ -202,4 +202,5 @@ io.on("connection", socket => {
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(Live server running on port ${PORT});
+
 });
