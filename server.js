@@ -122,14 +122,18 @@ db.all(
 
 // ================= GET LIVE STREAMS =================
 app.get("/live/list", (req, res) => {
-  db.all(
-    SELECT * FROM live_streams WHERE is_live = 1 ORDER BY created_at DESC,
-    [],
-    (err, rows) => {
-      res.json(rows);
+db.all(
+  `SELECT * FROM live_streams
+   WHERE is_live = 1
+   ORDER BY created_at DESC`,
+  (err, rows) => {
+    if (err) {
+      console.error(err.message);
+      return res.status(500).json({ error: "Database error" });
     }
-  );
-});
+    res.json(rows);
+  }
+);
 
 // ================= SOCKET.IO =================
 io.on("connection", socket => {
@@ -256,6 +260,7 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(Live server running on port ${PORT});
 });
+
 
 
 
