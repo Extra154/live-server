@@ -90,7 +90,7 @@ app.post("/live/start", (req, res) => {
   const stream_id = uuidv4();
 
 db.run(
-  INSERT INTO live_streams (stream_id, host_username) VALUES (?, ?),
+  `INSERT INTO live_streams (stream_id, host_username) VALUES (?, ?)`,
   [streamId, hostUsername],
   function (err) {
     if (err) {
@@ -256,5 +256,6 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(Live server running on port ${PORT});
 });
+
 
 
