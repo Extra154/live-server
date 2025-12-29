@@ -258,8 +258,9 @@ socket.on("comment", ({ stream_id, username, comment }) => {
 // ================= START SERVER =================
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(Live server running on port ${PORT});
+  console.log(`Live server running on port ${PORT}`);
 });
+
 
 
 
