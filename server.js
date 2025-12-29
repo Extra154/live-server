@@ -5,23 +5,18 @@ const cors = require("cors");
 const { Server } = require("socket.io");
 const sqlite3 = require("sqlite3").verbose();
 const { v4: uuidv4 } = require("uuid");
-const {
-  RtcTokenBuilder,
-  RtcRole
-} = require("agora-access-token");
+const { RtcTokenBuilder, RtcRole } = require("agora-access-token");
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: {
-    origin: "*"
-  }
+  cors: { origin: "*" }
 });
 
 app.use(cors());
 app.use(express.json());
 
-// ================= DATABASE =================
+/* ================= DATABASE ================= */
 const db = new sqlite3.Database("./live.db");
 
 db.serialize(() => {
@@ -59,7 +54,7 @@ db.serialize(() => {
   `);
 });
 
-// ================= AGORA TOKEN =================
+/* ================= AGORA TOKEN ================= */
 app.get("/rtc-token", (req, res) => {
   const channelName = req.query.channel;
   const uid = req.query.uid || 0;
@@ -84,170 +79,133 @@ app.get("/rtc-token", (req, res) => {
   res.json({ token });
 });
 
-// ================= START LIVE =================
+/* ================= START LIVE ================= */
 app.post("/live/start", (req, res) => {
   const { host_username } = req.body;
   const stream_id = uuidv4();
 
-db.run(
-  `INSERT INTO live_streams (stream_id, host_username) VALUES (?, ?)`,
-  [streamId, hostUsername],
-  function (err) {
-    if (err) {
-      console.error("Error inserting live stream:", err.message);
-      return res.status(500).json({ error: "Failed to start live stream" });
+  db.run(
+    `INSERT INTO live_streams (stream_id, host_username)
+     VALUES (?, ?)`,
+    [stream_id, host_username],
+    function (err) {
+      if (err) {
+        return res.status(500).json({ error: "Failed to start live" });
+      }
+      res.json({ stream_id });
     }
-    res.json({ message: "Live stream started", id: this.lastID });
-  }
-);
+  );
+});
 
-// ================= END LIVE =================
+/* ================= END LIVE ================= */
 app.post("/live/end", (req, res) => {
   const { stream_id } = req.body;
 
-db.all(
-  `SELECT * FROM live_streams 
-   WHERE is_live = 1 
-   ORDER BY created_at DESC`,
-  [],
-  (err, rows) => {
-    if (err) {
-      console.error("Error fetching live streams:", err.message);
-      return res.status(500).json({ error: "Failed to fetch live streams" });
+  db.run(
+    `UPDATE live_streams SET is_live = 0 WHERE stream_id = ?`,
+    [stream_id],
+    function (err) {
+      if (err) {
+        return res.status(500).json({ error: "Failed to end live" });
+      }
+      res.json({ message: "Live ended" });
     }
-    res.json(rows);
-  }
-);
+  );
 });
 
-// ================= GET LIVE STREAMS =================
+/* ================= LIST LIVE ================= */
 app.get("/live/list", (req, res) => {
-db.all(
-  `SELECT * FROM live_streams
-   WHERE is_live = 1
-   ORDER BY created_at DESC`,
-  (err, rows) => {
-    if (err) {
-      console.error(err.message);
-      return res.status(500).json({ error: "Database error" });
+  db.all(
+    `SELECT * FROM live_streams
+     WHERE is_live = 1
+     ORDER BY created_at DESC`,
+    [],
+    (err, rows) => {
+      if (err) {
+        return res.status(500).json({ error: "Database error" });
+      }
+      res.json(rows);
     }
-    res.json(rows);
-  }
-);
+  );
+});
 
-// ================= SOCKET.IO =================
+/* ================= SOCKET.IO ================= */
 io.on("connection", socket => {
   console.log("User connected:", socket.id);
 
-  // JOIN STREAM
+  /* JOIN LIVE */
   socket.on("joinLive", ({ stream_id, user_id }) => {
     socket.join(stream_id);
 
-   db.run(
-  `INSERT OR IGNORE INTO live_viewers (stream_id, user_id)
-   VALUES (?, ?)`,
-  [stream_id, user_id]
-);
+    db.run(
+      `INSERT OR IGNORE INTO live_viewers (stream_id, user_id)
+       VALUES (?, ?)`,
+      [stream_id, user_id]
+    );
 
-db.run(
-  `UPDATE live_streams
-   SET views = views + 1
-   WHERE stream_id = ?`,
-  [stream_id]
-);
+    db.run(
+      `UPDATE live_streams SET views = views + 1
+       WHERE stream_id = ?`,
+      [stream_id]
+    );
 
-db.get(
-  `SELECT views
-   FROM live_streams
-   WHERE stream_id = ?`,
-  [stream_id],
-  (err, row) => {
-    if (err) {
-      console.error("Failed to get views:", err.message);
-      return;
-    }
-    if (row) {
-      io.to(stream_id).emit("viewsUpdate", row.views);
-    }
-  }
-);
+    db.get(
+      `SELECT views FROM live_streams WHERE stream_id = ?`,
+      [stream_id],
+      (err, row) => {
+        if (row) {
+          io.to(stream_id).emit("viewsUpdate", row.views);
+        }
+      }
+    );
+  });
 
-  // LEAVE STREAM
-  socket.on("leaveLive", ({ stream_id, user_id }) => {
+  /* LEAVE LIVE */
+  socket.on("leaveLive", ({ stream_id }) => {
     socket.leave(stream_id);
   });
 
-// LIKE STREAM
-socket.on("like", ({ stream_id }) => {
-  db.run(
-    `UPDATE live_streams
-     SET likes = likes + 1
-     WHERE stream_id = ?`,
-    [stream_id],
-    (err) => {
-      if (err) {
-        console.error("Like update failed:", err.message);
-        return;
+  /* LIKE */
+  socket.on("like", ({ stream_id }) => {
+    db.run(
+      `UPDATE live_streams SET likes = likes + 1
+       WHERE stream_id = ?`,
+      [stream_id],
+      () => {
+        db.get(
+          `SELECT likes FROM live_streams WHERE stream_id = ?`,
+          [stream_id],
+          (err, row) => {
+            if (row) {
+              io.to(stream_id).emit("likesUpdate", row.likes);
+            }
+          }
+        );
       }
+    );
+  });
 
-      db.get(
-        `SELECT likes
-         FROM live_streams
-         WHERE stream_id = ?`,
-        [stream_id],
-        (err, row) => {
-          if (err) {
-            console.error("Fetch likes failed:", err.message);
-            return;
-          }
-          if (row) {
-            io.to(stream_id).emit("likesUpdate", row.likes);
-          }
-        }
-      );
-    }
-  );
-});
+  /* COMMENT */
+  socket.on("comment", ({ stream_id, username, comment }) => {
+    db.run(
+      `INSERT INTO live_comments (stream_id, username, comment)
+       VALUES (?, ?, ?)`,
+      [stream_id, username, comment],
+      () => {
+        db.run(
+          `UPDATE live_streams
+           SET comment_count = comment_count + 1
+           WHERE stream_id = ?`,
+          [stream_id]
+        );
 
-
-// COMMENT
-socket.on("comment", ({ stream_id, username, comment }) => {
-  db.run(
-    `INSERT INTO live_comments (stream_id, username, comment)
-     VALUES (?, ?, ?)`,
-    [stream_id, username, comment],
-    (err) => {
-      if (err) {
-        console.error("Insert comment failed:", err.message);
-        return;
+        io.to(stream_id).emit("newComment", {
+          username,
+          comment,
+          time: new Date()
+        });
       }
-
-      db.run(
-        `UPDATE live_streams
-         SET comment_count = comment_count + 1
-         WHERE stream_id = ?`,
-        [stream_id],
-        (err) => {
-          if (err) {
-            console.error("Update comment count failed:", err.message);
-            return;
-          }
-
-          io.to(stream_id).emit("newComment", {
-            username,
-            comment
-          });
-        }
-      );
-    }
-  );
-});;
-
-    io.to(stream_id).emit("newComment", {
-      username,
-      comment,
-      time: new Date()
-    });
+    );
   });
 
   socket.on("disconnect", () => {
@@ -255,11 +213,12 @@ socket.on("comment", ({ stream_id, username, comment }) => {
   });
 });
 
-// ================= START SERVER =================
+/* ================= START SERVER ================= */
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`Live server running on port ${PORT}`);
 });
+
 
 
 
