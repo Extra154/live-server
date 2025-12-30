@@ -13,6 +13,31 @@ const io = new Server(server, {
   cors: { origin: "*" }
 });
 
+const admin = require("firebase-admin");
+
+admin.initializeApp({
+  credential: admin.credential.cert({
+    projectId: process.env.FIREBASE_PROJECT_ID,
+    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+    privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n")
+  })
+});
+
+function sendLiveNotification(tokens, stream_id, host) {
+  const message = {
+    notification: {
+      title: "Live now 🔴",
+      body: `${host} just started a live stream`
+    },
+    data: {
+      stream_id
+    },
+    tokens
+  };
+
+  admin.messaging().sendMulticast(message);
+}
+
 app.use(cors());
 app.use(express.json());
 
@@ -218,6 +243,7 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`Live server running on port ${PORT}`);
 });
+
 
 
 
