@@ -13,6 +13,7 @@ const io = new Server(server, {
   cors: { origin: "*" }
 });
 
+/* ================= FIREBASE ================= */
 const admin = require("firebase-admin");
 
 admin.initializeApp({
@@ -23,21 +24,7 @@ admin.initializeApp({
   })
 });
 
-function sendLiveNotification(tokens, stream_id, host) {
-  const message = {
-    notification: {
-      title: "Live now 🔴",
-      body: `${host} just started a live stream`
-    },
-    data: {
-      stream_id
-    },
-    tokens
-  };
-
-  admin.messaging().sendMulticast(message);
-}
-
+/* ================= EXPRESS ================= */
 app.use(cors());
 app.use(express.json());
 
@@ -81,30 +68,34 @@ db.serialize(() => {
 
 /* ================= AGORA TOKEN ================= */
 app.get("/rtc-token", (req, res) => {
-  const channelName = req.query.channel;
-  const uid = req.query.uid || 0;
+  const { channel, uid, role } = req.query;
 
-  if (!channelName) {
+  if (!channel) {
     return res.status(400).json({ error: "channel required" });
   }
 
-  const expirationTimeInSeconds = 3600;
-  const currentTimestamp = Math.floor(Date.now() / 1000);
-  const privilegeExpiredTs = currentTimestamp + expirationTimeInSeconds;
+  const agoraRole =
+    role === "audience"
+      ? RtcRole.SUBSCRIBER
+      : RtcRole.PUBLISHER;
+
+  const expireTime = 900; // 15 minutes
+  const privilegeExpiredTs =
+    Math.floor(Date.now() / 1000) + expireTime;
 
   const token = RtcTokenBuilder.buildTokenWithUid(
     process.env.AGORA_APP_ID,
     process.env.AGORA_APP_CERTIFICATE,
-    channelName,
-    uid,
-    RtcRole.PUBLISHER,
+    channel,
+    uid || 0,
+    agoraRole,
     privilegeExpiredTs
   );
 
   res.json({ token });
 });
 
-/* ================= START LIVE ================= */
+/* ================= LIVE START ================= */
 app.post("/live/start", (req, res) => {
   const { host_username } = req.body;
   const stream_id = uuidv4();
@@ -113,7 +104,7 @@ app.post("/live/start", (req, res) => {
     `INSERT INTO live_streams (stream_id, host_username)
      VALUES (?, ?)`,
     [stream_id, host_username],
-    function (err) {
+    err => {
       if (err) {
         return res.status(500).json({ error: "Failed to start live" });
       }
@@ -122,14 +113,14 @@ app.post("/live/start", (req, res) => {
   );
 });
 
-/* ================= END LIVE ================= */
+/* ================= LIVE END ================= */
 app.post("/live/end", (req, res) => {
   const { stream_id } = req.body;
 
   db.run(
     `UPDATE live_streams SET is_live = 0 WHERE stream_id = ?`,
     [stream_id],
-    function (err) {
+    err => {
       if (err) {
         return res.status(500).json({ error: "Failed to end live" });
       }
@@ -138,7 +129,7 @@ app.post("/live/end", (req, res) => {
   );
 });
 
-/* ================= LIST LIVE ================= */
+/* ================= LIVE LIST ================= */
 app.get("/live/list", (req, res) => {
   db.all(
     `SELECT * FROM live_streams
@@ -154,12 +145,47 @@ app.get("/live/list", (req, res) => {
   );
 });
 
+/* ================= VIEWER DECREMENT ================= */
+function decrementViewer(stream_id, user_id) {
+  db.run(
+    `DELETE FROM live_viewers
+     WHERE stream_id = ? AND user_id = ?`,
+    [stream_id, user_id],
+    function () {
+      if (this.changes > 0) {
+        db.run(
+          `UPDATE live_streams
+           SET views = CASE WHEN views > 0 THEN views - 1 ELSE 0 END
+           WHERE stream_id = ?`,
+          [stream_id],
+          () => {
+            db.get(
+              `SELECT views FROM live_streams WHERE stream_id = ?`,
+              [stream_id],
+              (_, row) => {
+                if (row) {
+                  io.to(stream_id).emit("viewsUpdate", row.views);
+                }
+              }
+            );
+          }
+        );
+      }
+    }
+  );
+}
+
 /* ================= SOCKET.IO ================= */
 io.on("connection", socket => {
   console.log("User connected:", socket.id);
 
-  /* JOIN LIVE */
+  let currentStream = null;
+  let currentUser = null;
+
   socket.on("joinLive", ({ stream_id, user_id }) => {
+    currentStream = stream_id;
+    currentUser = user_id;
+
     socket.join(stream_id);
 
     db.run(
@@ -177,7 +203,7 @@ io.on("connection", socket => {
     db.get(
       `SELECT views FROM live_streams WHERE stream_id = ?`,
       [stream_id],
-      (err, row) => {
+      (_, row) => {
         if (row) {
           io.to(stream_id).emit("viewsUpdate", row.views);
         }
@@ -185,22 +211,27 @@ io.on("connection", socket => {
     );
   });
 
-  /* LEAVE LIVE */
-  socket.on("leaveLive", ({ stream_id }) => {
+  socket.on("leaveLive", ({ stream_id, user_id }) => {
     socket.leave(stream_id);
+    decrementViewer(stream_id, user_id);
   });
 
-  /* LIKE */
+  socket.on("disconnect", () => {
+    if (currentStream && currentUser) {
+      decrementViewer(currentStream, currentUser);
+    }
+    console.log("User disconnected:", socket.id);
+  });
+
   socket.on("like", ({ stream_id }) => {
     db.run(
-      `UPDATE live_streams SET likes = likes + 1
-       WHERE stream_id = ?`,
+      `UPDATE live_streams SET likes = likes + 1 WHERE stream_id = ?`,
       [stream_id],
       () => {
         db.get(
           `SELECT likes FROM live_streams WHERE stream_id = ?`,
           [stream_id],
-          (err, row) => {
+          (_, row) => {
             if (row) {
               io.to(stream_id).emit("likesUpdate", row.likes);
             }
@@ -210,7 +241,6 @@ io.on("connection", socket => {
     );
   });
 
-  /* COMMENT */
   socket.on("comment", ({ stream_id, username, comment }) => {
     db.run(
       `INSERT INTO live_comments (stream_id, username, comment)
@@ -227,14 +257,10 @@ io.on("connection", socket => {
         io.to(stream_id).emit("newComment", {
           username,
           comment,
-          time: new Date()
+          time: new Date().toISOString()
         });
       }
     );
-  });
-
-  socket.on("disconnect", () => {
-    console.log("User disconnected:", socket.id);
   });
 });
 
@@ -243,6 +269,7 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`Live server running on port ${PORT}`);
 });
+
 
 
 
